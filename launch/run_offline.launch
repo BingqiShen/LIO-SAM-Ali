@@ -1,0 +1,29 @@
+<!-- -->
+<launch>
+
+<!--    <node pkg="tf" type="static_transform_publisher" name="link1_broadcaster" args="0 0 0.05 3.1415926 -3.1388087272644043 -3.1406855583190918 base_footprint imu_link 100" />
+    <node pkg="tf" type="static_transform_publisher" name="link2_broadcaster" args="0 0 0 0 0 0 base_footprint velodyne 100" />-->
+
+    <param name="/use_sim_time" value="true"/>
+
+    <arg name="project" default="lio_sam"/>
+<!--    <node pkg="tf" type="static_transform_publisher" name="uwb_broadcaster22" args="0 0 0 0 0 0 base_footprint os_lidar 100" />
+    <node pkg="tf" type="static_transform_publisher" name="uwb_broadcaster32" args="0 0 0 0 0 0 base_footprint os_imu 100" />
+-->
+    <!-- Parameters -->
+    <!--<rosparam file="$(find lio_sam)/config/params.yaml" command="load" />-->
+    <rosparam file="$(find lio_sam)/config/params_velodyne.yaml" command="load" />
+
+    <!--- LOAM -->
+    <include file="$(find lio_sam)/launch/include/module_loam.launch" />
+
+    <!--- Robot State TF -->
+    <!--<include file="$(find lio_sam)/launch/include/module_robot_state_publisher.launch" />-->
+
+    <!--- Run Navsat -->
+    <!--<include file="$(find lio_sam)/launch/include/module_navsat.launch" />-->
+
+    <!--- Run Rviz-->
+<!--     <include file="$(find lio_sam)/launch/include/module_rviz.launch" /> -->
+
+</launch>
