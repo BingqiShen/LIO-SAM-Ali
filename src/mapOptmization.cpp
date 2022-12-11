@@ -15,9 +15,7 @@
 #include <gtsam/inference/Symbol.h>
 
 #include <gtsam/nonlinear/ISAM2.h>
-#include <cartographer_ros_msgs/CloudWithPose.h>
 #include <geometry_msgs/PoseStamped.h>
-#include <cartographer_ros_msgs/CloudWithPose.h>
 using namespace gtsam;
 
 using symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
@@ -83,57 +81,7 @@ inline Rigid3d ToRigid(float* origin_pose)
   return Rigid3d(t, q);
 }
 
-struct SubmapCloud
-{
-  Rigid3d local_pose;
-  ros::Time time;
-  pcl::PointCloud<PointType>::Ptr surf_cloud; // cloud in tracking
-  pcl::PointCloud<PointType>::Ptr corner_cloud;
-  int cloud_size;
 
-  cartographer_ros_msgs::CloudWithPose submap()
-  {
-    cartographer_ros_msgs::CloudWithPose submap;
-    sensor_msgs::PointCloud2 surf_cloud_ds;
-    sensor_msgs::PointCloud2 corner_cloud_ds;
-    pcl::toROSMsg(*(VoxelFilter(0.2).Filter(surf_cloud)), surf_cloud_ds);
-    pcl::toROSMsg(*(VoxelFilter(0.2).Filter(corner_cloud)), corner_cloud_ds);
-    surf_cloud_ds.header.stamp = time;
-    surf_cloud_ds.header.frame_id = "base_footprint";
-    corner_cloud_ds.header = surf_cloud_ds.header;
-    submap.header = surf_cloud_ds.header;
-    submap.local_pose.position.x = local_pose.translation().x();
-    submap.local_pose.position.y = local_pose.translation().y();
-    submap.local_pose.position.z = local_pose.translation().z();
-
-    submap.local_pose.orientation.x = local_pose.rotation().x();
-    submap.local_pose.orientation.y = local_pose.rotation().y();
-    submap.local_pose.orientation.z = local_pose.rotation().z();
-    submap.local_pose.orientation.w = local_pose.rotation().w();
-    submap.clouds.push_back(surf_cloud_ds);
-    submap.clouds.push_back(corner_cloud_ds);
-    submap.manual_valid = false;
-    return submap;
-  }
-
-  void addCloud(const Rigid3d& cur_pose,
-                pcl::PointCloud<PointType>::Ptr cur_surf_cloud,
-                pcl::PointCloud<PointType>::Ptr cur_corner_cloud)
-  {
-    Rigid3d relative_pose = local_pose.inverse() * cur_pose;
-    pcl::PointCloud<PointType>::Ptr surf_cloud_tmp(
-        new pcl::PointCloud<PointType>());
-    pcl::transformPointCloud(*cur_surf_cloud, *surf_cloud_tmp,
-                             relative_pose.ToAffine());
-    pcl::PointCloud<PointType>::Ptr corner_cloud_tmp(
-        new pcl::PointCloud<PointType>());
-    pcl::transformPointCloud(*cur_surf_cloud, *corner_cloud_tmp,
-                             relative_pose.ToAffine());
-    *surf_cloud += *surf_cloud_tmp;
-    *corner_cloud += *corner_cloud_tmp;
-    cloud_size++;
-  }
-};
 
 class mapOptimization : public ParamServer
 {
@@ -174,7 +122,6 @@ public:
   ros::Publisher pub_cloud_registered_raw_;
   ros::Publisher pub_loop_constraint_edge_;
   ros::Publisher pub_relative_pose_;
-  ros::Publisher pub_submap_;
   ros::Publisher pub_scan_matched_points_;
   ros::Publisher pub_pose_;
   ros::Publisher cloud_with_pose_pub_;
@@ -252,8 +199,6 @@ public:
   Eigen::Affine3f incremental_odometry_affine_front_;
   Eigen::Affine3f incremental_odometry_affine_back_;
   float prior_pose_[6];
-  Rigid3d optimized_pose_;
-  vector<SubmapCloud> submap_clouds_;
   int localization_cloud_size_;
   int key_value_;
   const int local_map_max_frames_num_;
@@ -304,18 +249,6 @@ public:
 
     pub_pose_ = nh.advertise<geometry_msgs::PoseStamped>("/lio_sam/matched_pose", 10);
     
-    //just for localization
-    sub_manual_localization_ = nh.subscribe<std_msgs::Empty>(
-        "/vtr/submap3D_localization", 5,
-        &mapOptimization::ManualLocalizationCallback, this);
-    pub_submap_ = nh.advertise<cartographer_ros_msgs::CloudWithPose>(
-        "submap3D_local_lio", 1);
-    pub_scan_matched_points_ =
-        nh.advertise<sensor_msgs::PointCloud2>("/scan_matched_points2", 1);
-    
-    // just for mapping
-    cloud_with_pose_pub_ = nh.advertise<cartographer_ros_msgs::CloudWithPose>(
-        "/external_lidar_odometry/cloud_with_pose", 100);
    
     pub_recent_key_frames_ =
         nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/map_local", 1);
@@ -405,8 +338,6 @@ public:
     std::lock_guard<std::mutex> lock(mtx_);
 
     static double timeLastProcessing = -1;
-    Rigid3d last_optimized_pose = optimized_pose_;
-//     cout <<"optimized_pose_: " <<  optimized_pose_ <<std::flush;
     static int lidar_cnt = 0;
     if (time_laser_info_cur_ - timeLastProcessing >= mappingProcessInterval)
     {
@@ -432,43 +363,13 @@ public:
 
       publishOdometry(msgIn);
       publishFrames();
-      // pub cloud for visualization
-      if (vtr_mode_ == 1)
-      {
-
-        sensor_msgs::PointCloud2 cloud_in_odom;
-        geometry_msgs::TransformStamped base2odom_stamped_;
-        base2odom_stamped_.header = msgIn->header;
-        base2odom_stamped_.transform.rotation.w =
-            optimized_pose_.rotation().w();
-        base2odom_stamped_.transform.rotation.x =
-            optimized_pose_.rotation().x();
-        base2odom_stamped_.transform.rotation.y =
-            optimized_pose_.rotation().y();
-        base2odom_stamped_.transform.rotation.z =
-            optimized_pose_.rotation().z();
-        base2odom_stamped_.transform.translation.x =
-            optimized_pose_.translation().x();
-        base2odom_stamped_.transform.translation.y =
-            optimized_pose_.translation().y();
-        base2odom_stamped_.transform.translation.z =
-            optimized_pose_.translation().z();
-        tf2::doTransform(msgIn->cloud_deskewed, cloud_in_odom,
-                         base2odom_stamped_);
-        cloud_in_odom.header.stamp = msgIn->header.stamp;
-        cloud_in_odom.header.frame_id = "odom";
-
-        pub_scan_matched_points_.publish(cloud_in_odom);
-      }
-      else 
-        return;
+      
       //             LOG(WARNING) <<"here";
       // pub localization submap
       if (lidar_cnt++ < 2)
         return;
       else
         lidar_cnt = 0;
-      Rigid3d relative_pose = last_optimized_pose.inverse() * optimized_pose_;
       pcl::PointCloud<PointType>::Ptr surf_cloud(
           new pcl::PointCloud<PointType>());
       pcl::PointCloud<PointType>::Ptr corner_cloud(
@@ -477,34 +378,6 @@ public:
       pcl::fromROSMsg(msgIn->cloud_surface, *surf_cloud);
       pcl::fromROSMsg(msgIn->cloud_corner, *corner_cloud);
 
-      if (submap_clouds_.empty() ||
-          (submap_clouds_.size() < 2 &&
-           submap_clouds_.front().cloud_size >= localization_cloud_size_))
-      {
-        SubmapCloud submap;
-        submap.time = msgIn->header.stamp;
-        submap.local_pose = optimized_pose_;
-        submap.cloud_size = 0;
-        submap.surf_cloud.reset(new pcl::PointCloud<PointType>());
-        submap.corner_cloud.reset(new pcl::PointCloud<PointType>());
-        submap.addCloud(optimized_pose_, surf_cloud, corner_cloud);
-        submap_clouds_.push_back(submap);
-      }
-
-      if (relative_pose.translation().norm() > 0.06 ||
-          fabs(relative_pose.getYaw()) > 0.01)
-      {
-        for (SubmapCloud& submap : submap_clouds_)
-        {
-          submap.addCloud(optimized_pose_, surf_cloud, corner_cloud);
-        }
-
-        if (submap_clouds_.front().cloud_size >= localization_cloud_size_ * 2)
-        {
-          pub_submap_.publish(submap_clouds_.front().submap());
-          submap_clouds_.erase(submap_clouds_.begin());
-        }
-      }
     }
   }
   
@@ -1812,42 +1685,8 @@ public:
             break;
         }
 
-        optimized_pose_ = ToRigid(transform_to_be_mapped_);
 
-        Rigid3d relative_pose_between_prior_and_optimized =
-            ToRigid(prior_pose_).inverse() * optimized_pose_;
 
-        double r_error =
-            Eigen::AngleAxisd(
-                relative_pose_between_prior_and_optimized.rotation()).angle();
-        double t_error =
-            relative_pose_between_prior_and_optimized.translation().norm();
-
-//         if (r_error > secondOptimizationRotationThreshold ||
-//             t_error > secondOptimizationTranslationThreshold)
-//         {
-//           LOG(WARNING) << "Second Optimization since " << r_error << " > "
-//                        << secondOptimizationRotationThreshold << "rad or "
-//                        << t_error << " > "
-//                        << secondOptimizationTranslationThreshold << "m";
-// 
-//           geometry_msgs::Pose msg;
-//           msg.position.x =
-//               relative_pose_between_prior_and_optimized.translation().x();
-//           msg.position.y =
-//               relative_pose_between_prior_and_optimized.translation().y();
-//           msg.position.z =
-//               relative_pose_between_prior_and_optimized.translation().z();
-//           pub_relative_pose_.publish(msg);
-//           for (int i = 0; i < 6; i++)
-//             prior_pose_[i] = transform_to_be_mapped_[i];
-// 
-//           prior_translation_weight = priorTranslationWeight;
-//           prior_rotation_weight = priorRotationWeight;
-//         }
-//         else
-//           break;
-//       }
 
       transformUpdate();
     }
@@ -2269,16 +2108,7 @@ public:
                                                 transform_to_be_mapped_[2]);
     pub_laser_odometry_global_.publish(laserOdometryROS);
     
-    if(vtr_mode_ != 1)
-    {
-      cartographer_ros_msgs::CloudWithPose cloud_with_pose_msg;
-      cloud_with_pose_msg.header.stamp = time_laser_info_stamp_;
-      cloud_with_pose_msg.header.frame_id = "base_footprint";
-      cloud_with_pose_msg.clouds.push_back(msgIn->cloud_surface);
-      cloud_with_pose_msg.clouds.push_back(msgIn->cloud_corner);
-      cloud_with_pose_msg.local_pose = laserOdometryROS.pose.pose;
-      cloud_with_pose_pub_.publish(cloud_with_pose_msg);
-    }
+    
     geometry_msgs::PoseStamped matched_pose;
     matched_pose.header = laserOdometryROS.header;
     matched_pose.pose.position.x = transform_to_be_mapped_[3];
@@ -2372,40 +2202,11 @@ public:
         publishCloud(&pub_recent_key_frame_, cloudOut, time_laser_info_stamp_,
                     odometryFrame);
       }
-      // publish registered high-res raw cloud just for mapping
-      if (vtr_mode_ != 1 && pub_cloud_registered_raw_.getNumSubscribers() != 0)
-      {
-        pcl::PointCloud<PointType>::Ptr cloudOut(
-            new pcl::PointCloud<PointType>());
-        pcl::fromROSMsg(cloud_info_.cloud_deskewed, *cloudOut);
-        PointTypePose thisPose6D = trans2PointTypePose(transform_to_be_mapped_);
-        *cloudOut = *transformPointCloud(cloudOut, &thisPose6D);
-        publishCloud(&pub_cloud_registered_raw_, cloudOut, time_laser_info_stamp_,
-                    odometryFrame);
-      }
+      
     }
     
-    // publish path just for mapping
-    if (vtr_mode_ != 1 && pub_path_.getNumSubscribers() != 0)
-    {
-      global_path_.header.stamp = time_laser_info_stamp_;
-      global_path_.header.frame_id = odometryFrame;
-      pub_path_.publish(global_path_);
-    }
   }
 
-  void ManualLocalizationCallback(const std_msgs::EmptyConstPtr& not_used)
-  {
-    if (submap_clouds_.empty())
-    {
-      LOG(WARNING) << "No cloud received, please wait...!";
-      return;
-    }
-    LOG(INFO) << "Manual localization start!";
-    auto msg = submap_clouds_.front().submap();
-    msg.manual_valid = true;
-    pub_submap_.publish(msg);
-  }
 };
 
 int main(int argc, char** argv)
