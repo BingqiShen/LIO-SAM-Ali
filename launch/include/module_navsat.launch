@@ -1,4 +1,3 @@
-<!-- -->
 <launch>
 
     <arg name="project" default="lio_sam"/>
@@ -13,8 +12,8 @@
     <!-- Navsat -->
     <node pkg="robot_localization" type="navsat_transform_node" name="navsat" respawn="true">
         <!-- <rosparam param="datum">[42.35893211, -71.09345588, 0.0, world, base_link]</rosparam> -->
-        <remap from="imu/data" to="imu_correct" />
-        <remap from="gps/fix" to="gps/fix" />
+        <remap from="/imu/data" to="/imu_raw" />
+        <remap from="/gps/fix" to="/gps/fix" />
         <remap from="odometry/filtered" to="odometry/navsat" />
     </node>
 
