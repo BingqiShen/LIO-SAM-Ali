@@ -15,6 +15,9 @@
     <include file="$(find lio_sam)/launch/include/module_navsat.launch" />
 
     <!--- Run Rviz-->
-    <!-- <include file="$(find lio_sam)/launch/include/module_rviz.launch" /> -->
+    <include file="$(find lio_sam)/launch/include/module_rviz.launch" />
+
+    <!--- Run repub-->
+    <include file="$(find lio_sam)/launch/include/module_repub.launch" />
 
 </launch>

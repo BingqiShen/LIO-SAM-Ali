@@ -81,6 +81,15 @@ link_directories(
 ###########
 ## Build ##
 ###########
+# Ros topics repub
+add_executable(${PROJECT_NAME}_repub tools/repub.cpp)
+add_dependencies(${PROJECT_NAME}_repub ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_repub ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
+
+# gps odom align
+add_executable(${PROJECT_NAME}_gps_odom_align tools/gps_odom_align.cpp)
+add_dependencies(${PROJECT_NAME}_gps_odom_align ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_gps_odom_align ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES})
 
 # Range Image Projection
 add_executable(${PROJECT_NAME}_imageProjection src/imageProjection.cpp)
