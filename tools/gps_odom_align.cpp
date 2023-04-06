@@ -110,7 +110,7 @@ void ecef2latlon(double ecef_x, double ecef_y, double ecef_z, double *lat, doubl
     *lat = latitude_rad / M_PI * 180;
 }
 
-void callback(const sensor_msgs::NavSatFixConstPtr& gps_msg, const nav_msgs::OdometryConstPtr& odom_msg)
+void callback(const sensor_msgs::NavSatFixConstPtr& gps_msg, const nav_msgs::OdometryConstPtr& odom_msg, ros::Publisher *base2gps_pub)
 {
 	// cout << "gps_msg->header.stamp.now(): " << gps_msg->header.stamp.now() << endl;
 
@@ -190,6 +190,21 @@ void callback(const sensor_msgs::NavSatFixConstPtr& gps_msg, const nav_msgs::Odo
 		double cur_lat, cur_lon;
 		ecef2latlon(t_ecef(0), t_ecef(1), t_ecef(2), &cur_lat, &cur_lon);
 		cout << std::fixed << "cur_lat: " << cur_lat << " cur_lon: " << cur_lon << endl;
+
+		nav_msgs::Odometry gps_odometry;
+		gps_odometry.header.stamp = gps_msg->header.stamp;
+		gps_odometry.header.frame_id = "gnss_link";
+		gps_odometry.child_frame_id = "base_link";
+
+		gps_odometry.pose.pose.position.x = cur_lat;
+		gps_odometry.pose.pose.position.y = cur_lon;
+		gps_odometry.pose.pose.position.z = 0.0;
+		gps_odometry.pose.pose.orientation.x = 0.0;
+		gps_odometry.pose.pose.orientation.y = 0.0;
+		gps_odometry.pose.pose.orientation.z = 0.0;
+		gps_odometry.pose.pose.orientation.w = 1.0;
+
+		base2gps_pub->publish(gps_odometry);
 		
 	}
 	else
@@ -209,13 +224,15 @@ int main(int argc,char **argv)
 	ros::Publisher odom_pub = nh.advertise<nav_msgs::Odometry>("/base2odom", 10);
 	ros::Subscriber sub_tf = nh.subscribe<tf2_msgs::TFMessage>
 								("/tf", 10, boost::bind(&tfCallback, _1, &odom_pub));
+	
+	ros::Publisher base2gps_pub = nh.advertise<nav_msgs::Odometry>("/base2gps", 10);
 
 	message_filters::Subscriber<sensor_msgs::NavSatFix> gps_sub(nh, "/gps/fix", 1);
 	message_filters::Subscriber<nav_msgs::Odometry> odom_sub(nh, "/base2odom", 1);
 
 	typedef sync_policies::ApproximateTime<sensor_msgs::NavSatFix, nav_msgs::Odometry> GPS_Odom_Sync_Policy;
 	message_filters::Synchronizer<GPS_Odom_Sync_Policy> sync(GPS_Odom_Sync_Policy(10), gps_sub, odom_sub);
-	sync.registerCallback(boost::bind(&callback, _1, _2));
+	sync.registerCallback(boost::bind(&callback, _1, _2, &base2gps_pub));
 
     
     // ros::Rate loop_rate(1);
