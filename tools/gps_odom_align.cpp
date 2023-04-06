@@ -35,6 +35,8 @@ using namespace message_filters;
 #define f 1.0 / 298.257223563
 #define WGS84_B WGS84_A * (1.0 - f)
 #define WGS84_E sqrt(WGS84_A * WGS84_A - WGS84_B * WGS84_B) / WGS84_A
+#define WGS84_E2 sqrt(WGS84_A * WGS84_A - WGS84_B * WGS84_B) / WGS84_B
+#define NAV_E2 (2.0 - f) * f // also e^2
 
 std::vector<std::vector<double>> ecef_coordinate;
 std::vector<std::vector<double>> odom_coordinate;
@@ -105,9 +107,61 @@ void ecef2latlon(double ecef_x, double ecef_y, double ecef_z, double *lat, doubl
 	longtitude_rad = atan2(ecef_y, ecef_x);
     *lon = longtitude_rad / M_PI * 180;
 
-    latitude_rad = asin(sqrt((WGS84_A * WGS84_A * sin(longtitude_rad) * sin(longtitude_rad) - ecef_y * ecef_y)
-                                / (WGS84_A * WGS84_A * sin(longtitude_rad) * sin(longtitude_rad) + (f * f - 2 * f) * ecef_y * ecef_y) ));
-    *lat = latitude_rad / M_PI * 180;
+    // latitude_rad = asin(sqrt((WGS84_A * WGS84_A * sin(longtitude_rad) * sin(longtitude_rad) - ecef_y * ecef_y)
+    //                             / (WGS84_A * WGS84_A * sin(longtitude_rad) * sin(longtitude_rad) + (f * f - 2 * f) * ecef_y * ecef_y) ));
+	double r = sqrt(ecef_x*ecef_x + ecef_y*ecef_y);
+    
+
+	double templat = atan2(ecef_z, r);
+	double tempalt = sqrt(r * r + ecef_z * ecef_z) - WGS84_A;
+	double rhoerror = 1000.0;
+	double zerror = 1000.0;
+        
+	int iter = 0; // number of iterations
+
+	//      %  Newton's method iteration on templat and tempalt makes
+	//      %   the residuals on rho and z progressively smaller.  Loop
+	//      %   is implemented as a 'while' instead of a 'do' to simplify
+	//      %   porting to MATLAB
+
+	while ((abs(rhoerror) > 1e-6) | (abs(zerror) > 1e-6)) 
+	{
+		double slat = sin(templat);
+		double clat = cos(templat);
+		double q = 1.0 - NAV_E2 * slat * slat;
+		double r_n = WGS84_A / sqrt(q);
+		double drdl = r_n * NAV_E2 * slat * clat / q; // d(r_n)/d(latitutde)
+
+		rhoerror = (r_n + tempalt) * clat - r;
+		zerror = (r_n * (1.0 - NAV_E2) + tempalt) * slat - ecef_z;
+
+		//          %             --                               -- --      --
+		//          %             |  drhoerror/dlat  drhoerror/dalt | |  a  b  |
+		//                        % Find Jacobian           |                       |=|        |
+		//          %             |   dzerror/dlat    dzerror/dalt  | |  c  d  |
+		//          %             --                               -- --      --
+
+		double aa = drdl * clat - (r_n + tempalt) * slat;
+		double bb = clat;
+		double cc = (1.0 - NAV_E2)*(drdl * slat + r_n * clat);
+		double dd = slat;
+
+		//Apply correction = inv(Jacobian)*errorvector
+
+		double invdet = 1.0 / (aa * dd - bb * cc);
+		templat = templat - invdet * (+dd * rhoerror - bb * zerror);
+		tempalt = tempalt - invdet * (-cc * rhoerror + aa * zerror);
+
+		iter++;
+
+		if (iter>20)
+		{
+			std::cout << "xyz2lla could not converge" << std::endl;
+			return;
+		}
+	}
+
+	*lat = templat / M_PI * 180;
 }
 
 void callback(const sensor_msgs::NavSatFixConstPtr& gps_msg, const nav_msgs::OdometryConstPtr& odom_msg, ros::Publisher *base2gps_pub)
@@ -119,7 +173,7 @@ void callback(const sensor_msgs::NavSatFixConstPtr& gps_msg, const nav_msgs::Odo
 		// 1. ecef
 		double ecef_x, ecef_y, ecef_z;
 		latlon2ecef(gps_msg->latitude, gps_msg->longitude, &ecef_x, &ecef_y, &ecef_z);
-
+		
 		// 2. odom
 		double odom_x, odom_y, odom_z;
 		odom_x = odom_msg->pose.pose.position.x;
@@ -128,7 +182,7 @@ void callback(const sensor_msgs::NavSatFixConstPtr& gps_msg, const nav_msgs::Odo
 
 		cout << "ecef_coordinate.size(): " << ecef_coordinate.size() << endl;
 
-		const int estimate_num = 30;
+		const int estimate_num = 50;
 		if(ecef_coordinate.size() < estimate_num)
 		{
 			std::vector<double> ecef_xyz;
